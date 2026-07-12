@@ -5,14 +5,29 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "fastapi>=0.121.3",
-    "kubernetes>=34.1.0",
-    "pyjwt>=2.10.1",
-    "redis>=7.1.0",
-    "uvicorn>=0.38.0",
+    "fastapi>=0.139.0",
+    "kubernetes>=36.0.2",
+    "pyjwt>=2.13.0",
+    "redis>=8.0.1",
+    "uvicorn>=0.51.0",
 ]
 
 [dependency-groups]
 dev = [
-    "ruff>=0.14.6",
+    "httpx>=0.28.1",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.15.21",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["main", "gen"]
+
+[tool.coverage.report]
+fail_under = 93
+show_missing = true

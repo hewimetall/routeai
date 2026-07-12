@@ -35,7 +35,10 @@ The current gateway code expects these runtime values:
 | `JWT_SECRET` | `your-jwt-secret-key` | Secret used to verify and generate HS256 JWTs. |
 | `JWT_ALGORITHM` | `HS256` | JWT signing algorithm. |
 | `REDIS_HOST` | `192.168.0.13` | Redis host used for response caching. |
-| Kubernetes config | `./kubeconfig.yml` | Cluster configuration loaded at startup/import time. |
+| `REDIS_PORT` | `6379` | Redis port used for response caching. |
+| `KUBECONFIG` | `./kubeconfig.yml` | Cluster configuration loaded lazily at startup or first Kubernetes call. |
+| `REQUEST_TIMEOUT` | `300` | Maximum seconds to wait for a worker Job. |
+| `JOB_POLL_INTERVAL` | `2` | Seconds between worker Job status checks. |
 
 Each service in `MCP_SERVICES` also references a Kubernetes secret whose
 `token` key is injected into the worker Job. For example, the `github` service
