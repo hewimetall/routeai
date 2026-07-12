@@ -6,7 +6,8 @@ import gen
 
 
 def test_generate_mcp_token_contains_expected_claims(monkeypatch):
-    monkeypatch.setattr(gen, "JWT_SECRET", "test-secret")
+    test_secret = "test-secret-with-at-least-thirty-two-bytes"
+    monkeypatch.setattr(gen, "JWT_SECRET", test_secret)
 
     token = gen.generate_mcp_token(
         user_id="user-1",
@@ -15,7 +16,7 @@ def test_generate_mcp_token_contains_expected_claims(monkeypatch):
         expires_hours=2,
     )
 
-    payload = jwt.decode(token, "test-secret", algorithms=[gen.JWT_ALGORITHM])
+    payload = jwt.decode(token, test_secret, algorithms=[gen.JWT_ALGORITHM])
     assert payload["user_id"] == "user-1"
     assert payload["namespace"] == "ns"
     assert payload["services"] == ["github", "slack"]

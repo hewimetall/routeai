@@ -4,7 +4,8 @@ from datetime import datetime, timedelta, timezone
 from typing import List
 
 # Секретный ключ (должен совпадать с JWT_SECRET в Gateway)
-JWT_SECRET = os.getenv("JWT_SECRET", "your-jwt-secret-key")
+DEFAULT_JWT_SECRET = "change-me-use-a-secure-jwt-secret-of-at-least-32-bytes"
+JWT_SECRET = os.getenv("JWT_SECRET", DEFAULT_JWT_SECRET)
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 
 def generate_mcp_token(

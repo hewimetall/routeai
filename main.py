@@ -3,8 +3,9 @@ import hashlib
 import json
 import logging
 import os
+from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional
 
 import jwt
 import kubernetes.client as k8s
@@ -18,11 +19,19 @@ from pydantic import BaseModel
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="MCP Gateway")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    await startup_event()
+    yield
+
+
+app = FastAPI(title="MCP Gateway", lifespan=lifespan)
 security = HTTPBearer()
 
 # Конфигурация
-JWT_SECRET = os.getenv("JWT_SECRET", "your-jwt-secret-key")
+DEFAULT_JWT_SECRET = "change-me-use-a-secure-jwt-secret-of-at-least-32-bytes"
+JWT_SECRET = os.getenv("JWT_SECRET", DEFAULT_JWT_SECRET)
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 REDIS_HOST = os.getenv("REDIS_HOST", "192.168.0.13")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
@@ -404,7 +413,6 @@ async def list_services(user_data: UserTokenData = Depends(verify_token)):
 
 
 
-@app.on_event("startup")
 async def startup_event():
     """Инициализация при запуске"""
     try:

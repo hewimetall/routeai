@@ -32,7 +32,7 @@ The current gateway code expects these runtime values:
 
 | Setting | Default | Description |
 | --- | --- | --- |
-| `JWT_SECRET` | `your-jwt-secret-key` | Secret used to verify and generate HS256 JWTs. |
+| `JWT_SECRET` | `change-me-use-a-secure-jwt-secret-of-at-least-32-bytes` | Secret used to verify and generate HS256 JWTs. Set a unique production value. |
 | `JWT_ALGORITHM` | `HS256` | JWT signing algorithm. |
 | `REDIS_HOST` | `192.168.0.13` | Redis host used for response caching. |
 | `REDIS_PORT` | `6379` | Redis port used for response caching. |
