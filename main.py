@@ -1,37 +1,74 @@
-from fastapi import FastAPI, HTTPException, Depends
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel
-import redis.asyncio as redis
-import kubernetes.client as k8s
-from kubernetes import config
-import json
-import hashlib
 import asyncio
-import jwt
-from datetime import datetime
-from typing import Dict, List, Optional, Any
+import hashlib
+import json
 import logging
+import os
+from contextlib import asynccontextmanager
+from datetime import datetime
+from typing import Any, AsyncIterator, Dict, List, Optional
+
+import jwt
+import kubernetes.client as k8s
+import redis.asyncio as redis
+from fastapi import Depends, FastAPI, HTTPException
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from kubernetes import config
+from pydantic import BaseModel
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="MCP Gateway")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    await startup_event()
+    yield
+
+
+app = FastAPI(title="MCP Gateway", lifespan=lifespan)
 security = HTTPBearer()
 
 # Конфигурация
-JWT_SECRET = "your-jwt-secret-key"
-JWT_ALGORITHM = "HS256"
-REDIS_HOST = "192.168.0.13"
-REQUEST_TIMEOUT = 300  # 5 минут
+DEFAULT_JWT_SECRET = "change-me-use-a-secure-jwt-secret-of-at-least-32-bytes"
+JWT_SECRET = os.getenv("JWT_SECRET", DEFAULT_JWT_SECRET)
+JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
+REDIS_HOST = os.getenv("REDIS_HOST", "192.168.0.13")
+REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+KUBECONFIG_PATH = os.getenv("KUBECONFIG", "./kubeconfig.yml")
+REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "300"))  # 5 минут
+JOB_POLL_INTERVAL = float(os.getenv("JOB_POLL_INTERVAL", "2"))
 
 # Инициализация клиентов
-redis_client = redis.Redis(host=REDIS_HOST, port=6379, decode_responses=True)
-config.load_kube_config(
-    "./kubeconfig.yml"
-)
-k8s_client = k8s.CoreV1Api()
-k8s_batch = k8s.BatchV1Api()
+redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
+k8s_client: Optional[k8s.CoreV1Api] = None
+k8s_batch: Optional[k8s.BatchV1Api] = None
+
+
+def initialize_kubernetes_clients() -> None:
+    """Lazy Kubernetes initialization keeps imports testable and side-effect free."""
+    global k8s_client, k8s_batch
+
+    if k8s_client is not None and k8s_batch is not None:
+        return
+
+    config.load_kube_config(config_file=KUBECONFIG_PATH)
+    k8s_client = k8s.CoreV1Api()
+    k8s_batch = k8s.BatchV1Api()
+
+
+def get_k8s_client() -> k8s.CoreV1Api:
+    initialize_kubernetes_clients()
+    if k8s_client is None:
+        raise RuntimeError("Kubernetes CoreV1Api client is not initialized")
+    return k8s_client
+
+
+def get_k8s_batch() -> k8s.BatchV1Api:
+    initialize_kubernetes_clients()
+    if k8s_batch is None:
+        raise RuntimeError("Kubernetes BatchV1Api client is not initialized")
+    return k8s_batch
 
 # Модели данных
 class UserTokenData(BaseModel):
@@ -79,18 +116,22 @@ async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(secur
     try:
         token = credentials.credentials
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        
-        user_data = UserTokenData(
-            user_id=payload.get("user_id"),
-            namespace=payload.get("namespace"),
-            services=payload.get("services", [])
-        )
-        
-        if not user_data.user_id or not user_data.namespace:
+
+        user_id = payload.get("user_id")
+        namespace = payload.get("namespace")
+        if not user_id or not namespace:
             raise HTTPException(status_code=401, detail="Invalid token data")
-            
+
+        user_data = UserTokenData(
+            user_id=user_id,
+            namespace=namespace,
+            services=payload.get("services", []),
+        )
+
         return user_data
-        
+
+    except HTTPException:
+        raise
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expired")
     except jwt.InvalidTokenError:
@@ -107,7 +148,7 @@ async def verify_service_access(user_data: UserTokenData, service: str):
 def generate_request_hash(request_data: Dict) -> str:
     """Генерация хеша запроса для кеширования"""
     request_str = json.dumps(request_data, sort_keys=True)
-    return hashlib.md5(request_str.encode()).hexdigest()[:8]
+    return hashlib.sha256(request_str.encode()).hexdigest()[:12]
 
 def create_jrpc_error(code: int, message: str, id: Optional[str] = None) -> JRPCResponse:
     """Создание JRPC ошибки"""
@@ -132,7 +173,7 @@ async def execute_mcp_service(
         return create_jrpc_error(-32001, f"Service {service} not found", request.id)
     
     # Генерируем хеш запроса для кеширования
-    request_hash = generate_request_hash(request.dict())
+    request_hash = generate_request_hash(request.model_dump())
     job_id = f"mcp-{user_data.user_id}-{service}-{request_hash}"
     cache_key = f"result:{job_id}"
     
@@ -149,10 +190,11 @@ async def execute_mcp_service(
     # Создаем Kubernetes Job
     try:
         job_manifest = create_job_manifest(job_id, user_data, service, request)
+        batch_client = get_k8s_batch()
         await asyncio.to_thread(
-            k8s_batch.create_namespaced_job,
+            batch_client.create_namespaced_job,
             namespace=user_data.namespace,
-            body=job_manifest
+            body=job_manifest,
         )
         
         logger.info(f"Created job {job_id} in namespace {user_data.namespace}")
@@ -170,7 +212,7 @@ async def execute_mcp_service(
             await redis_client.setex(
                 cache_key,
                 3600,  # TTL 1 час
-                json.dumps(result.dict())
+                json.dumps(result.model_dump()),
             )
         
         return result
@@ -187,10 +229,11 @@ async def wait_for_job_completion(job_id: str, namespace: str, request_id: Optio
     while (datetime.now() - start_time).total_seconds() < REQUEST_TIMEOUT:
         try:
             # Проверяем статус Job
+            batch_client = get_k8s_batch()
             job = await asyncio.to_thread(
-                k8s_batch.read_namespaced_job,
+                batch_client.read_namespaced_job,
                 name=job_id,
-                namespace=namespace
+                namespace=namespace,
             )
             
             if job.status.succeeded:
@@ -207,7 +250,7 @@ async def wait_for_job_completion(job_id: str, namespace: str, request_id: Optio
             if e.status != 404:
                 logger.warning(f"Error checking job {job_id}: {e}")
         
-        await asyncio.sleep(2)  # Ждем 2 секунды перед следующей проверкой
+        await asyncio.sleep(JOB_POLL_INTERVAL)
     
     # Таймаут
     logger.warning(f"Job {job_id} timeout")
@@ -218,10 +261,11 @@ async def get_job_result(job_id: str, namespace: str, request_id: Optional[str])
     
     try:
         # Получаем Pod для Job
+        core_client = get_k8s_client()
         pods = await asyncio.to_thread(
-            k8s_client.list_namespaced_pod,
+            core_client.list_namespaced_pod,
             namespace=namespace,
-            label_selector=f"job-name={job_id}"
+            label_selector=f"job-name={job_id}",
         )
         
         if not pods.items:
@@ -231,13 +275,13 @@ async def get_job_result(job_id: str, namespace: str, request_id: Optional[str])
         
         # Получаем логи Pod
         logs = await asyncio.to_thread(
-            k8s_client.read_namespaced_pod_log,
+            core_client.read_namespaced_pod_log,
             name=pod.metadata.name,
-            namespace=namespace
+            namespace=namespace,
         )
         
         # Парсим JRPC ответ (ищем последнюю валидную JSON строку)
-        lines = [line.strip() for line in logs.split('\n') if line.strip()]
+        lines = [line.strip() for line in logs.split("\n") if line.strip()]
         
         for line in reversed(lines):
             try:
@@ -255,8 +299,8 @@ async def get_job_result(job_id: str, namespace: str, request_id: Optional[str])
         # Если не нашли валидный JRPC, возвращаем последнюю строку как результат
         if lines:
             return JRPCResponse(result=lines[-1], id=request_id)
-        else:
-            return create_jrpc_error(-32000, "Empty response from job", request_id)
+
+        return create_jrpc_error(-32000, "Empty response from job", request_id)
         
     except k8s.ApiException as e:
         logger.error(f"Failed to get result for job {job_id}: {e}")
@@ -369,7 +413,6 @@ async def list_services(user_data: UserTokenData = Depends(verify_token)):
 
 
 
-@app.on_event("startup")
 async def startup_event():
     """Инициализация при запуске"""
     try:
@@ -379,7 +422,8 @@ async def startup_event():
         logger.error(f"❌ Redis connection error: {e}")
     
     try:
-        await asyncio.to_thread(k8s_client.get_api_resources)
+        core_client = get_k8s_client()
+        await asyncio.to_thread(core_client.get_api_resources)
         logger.info("✅ Connected to Kubernetes")
     except Exception as e:
         logger.error(f"❌ Kubernetes connection error: {e}")

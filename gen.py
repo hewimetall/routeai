@@ -1,11 +1,12 @@
 import jwt
-from datetime import datetime, timedelta
-from typing import List, Dict
-import json
+import os
+from datetime import datetime, timedelta, timezone
+from typing import List
 
 # Секретный ключ (должен совпадать с JWT_SECRET в Gateway)
-JWT_SECRET = "your-jwt-secret-key"
-JWT_ALGORITHM = "HS256"
+DEFAULT_JWT_SECRET = "change-me-use-a-secure-jwt-secret-of-at-least-32-bytes"
+JWT_SECRET = os.getenv("JWT_SECRET", DEFAULT_JWT_SECRET)
+JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 
 def generate_mcp_token(
     user_id: str,
@@ -34,8 +35,8 @@ def generate_mcp_token(
         "services": services,
         
         # Стандартные JWT claims
-        "exp": datetime.utcnow() + timedelta(hours=expires_hours),
-        "iat": datetime.utcnow(),
+        "exp": datetime.now(timezone.utc) + timedelta(hours=expires_hours),
+        "iat": datetime.now(timezone.utc),
         "iss": "mcp-token-generator"
     }
     
@@ -59,9 +60,9 @@ if __name__ == "__main__":
     )
     
     print("=== Токен для пользователя 1 ===")
-    print(f"User ID: user-001")
-    print(f"Namespace: user-001-namespace") 
-    print(f"Services: notion, github, slack, yandex-disk, vk")
+    print("User ID: user-001")
+    print("Namespace: user-001-namespace") 
+    print("Services: notion, github, slack, yandex-disk, vk")
     print(f"Token: {token1}")
     print()
     
